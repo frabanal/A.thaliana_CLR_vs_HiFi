@@ -1,0 +1,60 @@
+---
+title: "README_GenomeSize_MGSE"
+output: html_document
+---
+
+Generate own Illumina mapping
+
+```{bash}
+REF=Hifiasm_Canu-Arrow_2.patch.scaffold.Chr.fa
+ChrCMphiX=at_ChrC_ChrM_phiX74.fa
+CORES=48
+FASTQ=<PATH_TO_FASTQ_READS_DIRECTORY>  
+BUSCO=run_9994.Hifiasm_Canu-Arrow.patch.embryophyta_odb10/full_table_9994.Hifiasm_Canu-Arrow.patch.embryophyta_odb10.tsv 
+outputTMP=<PATH_TO_OUTPUT_DIRECTORY> 
+
+# Set up to PATH
+source activate MGSE
+MGSE=<PATH_TO_MGSE_BIN>/MGSE-master/MGSE.py
+
+# Concatenate Scaffolded Chromosomes with Organellar genomes. 
+cd $outputTMP
+
+mkdir REF_9994_ChrCMphiX
+
+cat $REF $ChrCMphiX > REF_9994_ChrCMphiX/9994_ChrCMphiX.fa
+
+# Index reference
+bwa index -a bwtsw REF_9994_ChrCMphiX/9994_ChrCMphiX.fa
+samtools faidx REF_9994_ChrCMphiX/9994_ChrCMphiX.fa
+
+echo "Aligning reads to genome..."
+bwa mem -t $CORES -R "@RG\tID:9994\tSM:9994" REF_9994_ChrCMphiX/9994_ChrCMphiX.fa \
+      $FASTQ.cutadapt.R1.fastq.gz \
+      $FASTQ.cutadapt.R2.fastq.gz \
+      | samtools view -@ $CORES -Sbh - > 9994.9994_ChrCMphiX.illumina.uns.bam
+
+echo "Sorting bam file..."
+samtools sort -@ $CORES -o 9994.9994_ChrCMphiX.illumina.bam 9994.9994_ChrCMphiX.illumina.uns.bam
+samtools index 9994.9994_ChrCMphiX.illumina.bam
+```
+
+Estimate genome size with MGSE
+
+```{bash}
+echo "Estimating genome size"
+python $MGSE --bam $outputTMP/9994.9994_ChrCMphiX.illumina.bam --out $outputTMP --busco $BUSCO --threads $CORES --plot TRUE --bam_is_sorted --black $outputTMP/REF_9994_ChrCMphiX/BLACK_list.txt
+# --cov $outputTMP/9994.9994_ChrCMphiX.illumina.bam.cov
+
+cat $outputTMP/report.txt
+
+```
+
+average coverage in reference regions (median): 111.0
+average coverage in reference regions (mean):   133.117975211
+total coverage (combined length of all mapped reads):   19339704482.0
+total sequence length:  136140757
+estimated genome size based on mean [Mbp]:      145.282441769
+estimated genome size based on median [Mbp]:    174.23157191
+
+

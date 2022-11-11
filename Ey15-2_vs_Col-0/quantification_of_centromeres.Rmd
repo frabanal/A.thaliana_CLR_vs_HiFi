@@ -1,0 +1,189 @@
+---
+title: "count_centromere"
+output: html_document
+---
+
+# PROCESSING OF GFF FILES
+
+```{r}
+workdir <- '/GitHub/Ey15-2_vs_Col-0/'
+
+setwd(workdir)
+
+
+library(ggplot2)
+library(gridExtra)
+library(ggthemes)
+
+# Load accession names from list of gff files
+files <- list.files(paste(workdir, "/gff_files/", sep = ""), pattern = "*centromere.gff")
+files
+accs <- unlist(lapply(strsplit(files, "[.]"), "[", 1))
+accs
+
+```
+
+
+```{r}
+
+gff <- data.frame(Chromosome=NA, Type=NA, Start=NA , End=NA, Orientation=NA, Length=NA, Divergence=NA, Accession=NA)
+
+  
+for(i in 1:length(accs)){
+  # Read both rDNA and rRNA
+  gff_tmp <- read.table(paste(workdir, '/gff_files/', accs[i], '.centromere.gff', sep = ''))
+
+  #Guarantee only chromosomes
+  gff_tmp <- gff_tmp[ grep("Chr", gff_tmp$V1), ]
+  
+  #Get rid of ugly suffix in Diff lines names
+  gff_tmp$V1 <- gsub(pattern = "_RagTag_RagTag", replacement = "", gff_tmp$V1)
+  
+  # Split useful info columns
+  gff_tmp$Length <- unlist(lapply(strsplit(as.character(gff_tmp$V9), "Length="), "[", 2))
+  gff_tmp$Length <- as.numeric(unlist(lapply(strsplit(as.character(gff_tmp$Length), "[;]"), "[", 1)))
+
+  gff_tmp$Divergence <- unlist(lapply(strsplit(as.character(gff_tmp$V9), "Divergence="), "[", 2))
+  gff_tmp$Divergence <- as.numeric(unlist(lapply(strsplit(as.character(gff_tmp$Divergence), "[;]"), "[", 1)))
+
+  # Get rid of unnecessary columns
+  gff_tmp <- gff_tmp[ , -c(2,6,8,9)]
+  colnames(gff_tmp)[1:5] <- c('Chromosome', 'Type', 'Start', 'End', 'Orientation')
+
+  # Add accession
+  gff_tmp$Accession <- accs[i]
+
+  # Add to final data frame
+  gff <- rbind(gff, gff_tmp)
+  
+}  
+  
+gff <- gff[-1,]
+
+head(gff)
+
+# In case the gff contains other annotations, make sure we are working with only centromeres
+centromere <- subset(gff, Type == "centromere")
+
+# Remove entries based on length only
+dim(centromere)
+#[1] 280721      8
+
+# Keep only satellite repeats larger than 150bp
+centromere_filt <- subset(centromere, Length > 150 )
+dim(centromere_filt)
+#[1] 274907      8
+
+centromere_filt
+
+```
+
+# OVERLAPS INTO BLOCKS
+
+```{r}
+library(data.table)
+
+# Define chromosomes
+chromosomes <- data.frame(Chr=c('Chr1', 'Chr2', 'Chr3', 'Chr4', 'Chr5'), Size=c(30427671, 19698289, 23459830, 18585056, 26975502), stringsAsFactors=FALSE)
+
+# Define signs
+signs <- c("+", "-")
+
+# Declare object container
+centromere_blocks <- data.frame(Chromosome=NA, Repeat=NA, Start=NA, End=NA, Orientation=NA, Length=NA, Accession=NA)
+
+# Loop accession
+for(a in 1:length(accs)){
+# Loop Chromosome
+  for(c in 1:dim(chromosomes)[1]){
+# Loop Orientation
+    for(o in 1:length(signs)){
+  
+      # subset single group to be analyzed            
+      centromere_ranges <- subset(centromere_filt, Accession == accs[a] & Chromosome == chromosomes[c,1] & Orientation == signs[o])
+      centromere_ranges <- centromere_ranges[,c(3,4)]
+      
+      # Condition to check if object has rows
+      if(dim(centromere_ranges)[1] > 0){
+        # Overlapping
+        setDT(centromere_ranges)
+        centromere_ranges <-  centromere_ranges[, .(start=min(Start), stop=max(End)),
+         by=.(group=cumsum(c(1, tail(Start-3, -1) > head(End+3, -1))))]
+
+        # Bring all meta information for the block
+        centromere_blocks_TMP <- data.frame(Chromosome=chromosomes[c,1], Repeat="Centromere", Start=centromere_ranges$start, End=centromere_ranges$stop, Orientation=signs[o], Length=centromere_ranges$stop-centromere_ranges$start, Accession=accs[a])
+      
+        # Merge with larger dataset
+        centromere_blocks <- rbind(centromere_blocks, centromere_blocks_TMP)
+      }
+    }
+  }
+}
+# Remove first empty row
+centromere_blocks <- centromere_blocks[-1,]
+
+# Sort by coordinate
+centromere_blocks <- centromere_blocks[  with(centromere_blocks, order(Accession, Chromosome, Start)), ]
+
+centromere_blocks
+
+```
+
+```{r}
+
+# Blocks for Benchmarking paper, comparison with Col-0
+centromere_blocks_Col <- subset(centromere_blocks, Accession == "Col-0" | Accession == "Naish2021" | Accession == "Wang2021" | Accession == 9994)
+
+# Change names
+centromere_blocks_Col$Accession <- sub("9994", "9994 This study", centromere_blocks_Col$Accession)
+centromere_blocks_Col$Accession <- sub("Col-0", "6909 This study", centromere_blocks_Col$Accession)
+centromere_blocks_Col$Accession <- sub("Wang2021", "Wang et al. 2021", centromere_blocks_Col$Accession)
+centromere_blocks_Col$Accession <- sub("Naish2021", "Naish et al. 2021", centromere_blocks_Col$Accession)
+
+centromere_blocks_Col
+
+centromere_acc_chr_Col <- aggregate(centromere_blocks_Col$Length, by=list(centromere_blocks_Col$Chromosome, centromere_blocks_Col$Accession, centromere_blocks_Col$Orientation), sum)
+colnames(centromere_acc_chr_Col) <- c('Chromosome', 'Accession', 'Orientation', 'Length')
+
+centromere_acc_chr_Col
+
+```
+
+#Barplot, comparison of ALL Col-0 and 9994
+
+```{r}
+
+centromere_acc_chr_Col$Type <- sapply(centromere_acc_chr_Col$Accession, FUN=function(x){
+  if(x=='9994 This study'){
+    x <- 'Ey15-2 (id: 9994)'
+  }else{
+    x <- 'Col-0    (id: 6909)'
+  }
+})
+centromere_acc_chr_Col$Orientation <- sub("-", "\u2013", centromere_acc_chr_Col$Orientation, fixed=TRUE)
+
+
+centromere_acc_chr_Col$Type <- paste(centromere_acc_chr_Col$Orientation, centromere_acc_chr_Col$Type, sep="   ")
+
+
+# Sort levels TYPE
+centromere_acc_chr_Col$Type <- factor(centromere_acc_chr_Col$Type, levels = c("\u2013   Ey15-2 (id: 9994)", "+   Ey15-2 (id: 9994)", "\u2013   Col-0    (id: 6909)", "+   Col-0    (id: 6909)"))
+levels(factor(centromere_acc_chr_Col$Type))
+
+# Sort levels ACCESSION
+centromere_acc_chr_Col$Accession <- factor(centromere_acc_chr_Col$Accession, levels = c("9994", "9994 This study", "Col-0", "6909 This study", "Wang2021", "Wang et al. 2021", "Naish2021", "Naish et al. 2021" ))
+levels(factor(centromere_acc_chr_Col$Accession))
+
+
+#png(paste(workdir, "/plots/centromere_comparison.9994_Col-0.png", sep = ""), width = 2800, height = 1800, res = 400)
+ggplot(centromere_acc_chr_Col, aes(x = Accession, y = Length/1000000, fill = Type)) +
+    geom_col(position = "stack", stat = "identity") + 
+    scale_fill_manual(values=c("#dfc27d", "#b6843f",  "#80cdc1", "#08979c", "#80cdc1", "#08979c", "#80cdc1", "#08979c", "#80cdc1", "#08979c", "#80cdc1", "#08979c")) +
+    facet_grid(. ~ Chromosome) +
+    theme_bw() +
+    xlab("") + ylab("Centromere length (Mb)") +
+    ggtitle("Centromeres") +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+#dev.off()
+
+```

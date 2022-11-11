@@ -1,0 +1,156 @@
+---
+title: "analysis_5S_in_CCSreads"
+output: html_document
+---
+
+Process GFF files of CCS reads
+
+```{r}
+workdir <- '/GitHub/5SrRNAs_in_CCSreads/'
+
+setwd(workdir)
+
+library(ggplot2)
+library(gridExtra)
+library(ggthemes)
+
+# Load accession names from universal list
+files_5S <- list.files(workdir, pattern = "*.ALLx.rRNA.gff", recursive = TRUE)
+files_5S
+accs_5S <- unlist(lapply(strsplit(files_5S, "[/.]"), "[", 1))
+accs_5S
+
+
+gff_5S <- data.frame(Chromosome=NA, Type=NA, Start=NA , End=NA, Orientation=NA, Length=NA, Divergence=NA, Accession=NA)
+
+  
+for(i in 1:length(accs_5S)){
+  # Read both rDNA and rRNA
+  gff_tmp <- read.table(paste(workdir, files_5S[i], sep = '/'))
+
+  # Split useful info columns
+  gff_tmp$Length <- unlist(lapply(strsplit(as.character(gff_tmp$V9), "Length="), "[", 2))
+  gff_tmp$Length <- as.numeric(unlist(lapply(strsplit(as.character(gff_tmp$Length), "[;]"), "[", 1)))
+
+  gff_tmp$Divergence <- unlist(lapply(strsplit(as.character(gff_tmp$V9), "Divergence="), "[", 2))
+  gff_tmp$Divergence <- as.numeric(unlist(lapply(strsplit(as.character(gff_tmp$Divergence), "[;]"), "[", 1)))
+
+  # Get rid of unnecessary columns
+  gff_tmp <- gff_tmp[ , -c(2,6,8,9)]
+  colnames(gff_tmp)[1:5] <- c('Chromosome', 'Type', 'Start', 'End', 'Orientation')
+
+  # Add accession
+  gff_tmp$Accession <- accs_5S[i]
+
+  # Add to final data frame
+  gff_5S <- rbind(gff_5S, gff_tmp)
+  
+}  
+  
+gff_5S <- gff_5S[-1,]
+
+dim(gff_5S)
+head(gff_5S)
+
+
+```
+
+
+
+#Count absolute 5S rRNA number in CCS reads
+
+6909
+```{r}
+ccs_5S_6909 <- subset(gff_5S, Type == "5S_rRNA" & Accession == 6909)
+
+# Filter for certain length and count discretely
+dim(ccs_5S_6909)
+#[1] 378988      8
+ccs_5S_6909 <- subset(ccs_5S_6909, Length >= 100)
+dim(ccs_5S_6909)
+#[1] 363615      8
+dim(ccs_5S_6909)[1]/121.864
+#2983.777
+
+```
+
+
+9994
+```{r}
+ccs_5S_9994 <- subset(gff_5S, Type == "5S_rRNA" & Accession == 9994)
+
+# Filter for certain length and count discretely
+dim(ccs_5S_9994)
+#[1] 215523      8
+ccs_5S_9994 <- subset(ccs_5S_9994, Length >= 100)
+dim(ccs_5S_9994)
+#[1] 205573      8
+dim(ccs_5S_9994)[1]/110.352
+#1862.88
+
+```
+
+# Count total number of 5S rRNAs in the assemblies
+
+6909
+```{r}
+
+gff_6909 <- read.table('assemblies_gff_files/Col-0.5S_rRNA.gff')
+# Split useful info columns
+gff_6909$Length <- unlist(lapply(strsplit(as.character(gff_6909$V9), "Length="), "[", 2))
+gff_6909$Length <- as.numeric(unlist(lapply(strsplit(as.character(gff_6909$Length), "[;]"), "[", 1)))
+
+gff_6909$Divergence <- unlist(lapply(strsplit(as.character(gff_6909$V9), "Divergence="), "[", 2))
+gff_6909$Divergence <- as.numeric(unlist(lapply(strsplit(as.character(gff_6909$Divergence), "[;]"), "[", 1)))
+
+# Get rid of unnecessary columns
+gff_6909 <- gff_6909[ , -c(2,6,8,9)]
+colnames(gff_6909)[1:5] <- c('Chromosome', 'Type', 'Start', 'End', 'Orientation')
+
+gff_6909
+
+# QC plots
+hist(gff_6909$Divergence, breaks=96)
+hist(gff_6909$Length, breaks=96)
+ggplot(gff_6909, aes(x=Length, y=Divergence)) +
+  geom_point( size=0.7) +
+  ggtitle("5S rDNAs")
+
+dim(gff_6909)
+#4051
+gff_6909 <- subset(gff_6909, Length >= 100)
+dim(gff_6909)
+#3935
+
+```
+
+9994
+```{r}
+gff_9994 <- read.table('assemblies_gff_files/9994.5S_rRNA.gff')
+# Split useful info columns
+gff_9994$Length <- unlist(lapply(strsplit(as.character(gff_9994$V9), "Length="), "[", 2))
+gff_9994$Length <- as.numeric(unlist(lapply(strsplit(as.character(gff_9994$Length), "[;]"), "[", 1)))
+
+gff_9994$Divergence <- unlist(lapply(strsplit(as.character(gff_9994$V9), "Divergence="), "[", 2))
+gff_9994$Divergence <- as.numeric(unlist(lapply(strsplit(as.character(gff_9994$Divergence), "[;]"), "[", 1)))
+
+# Get rid of unnecessary columns
+gff_9994 <- gff_9994[ , -c(2,6,8,9)]
+colnames(gff_9994)[1:5] <- c('Chromosome', 'Type', 'Start', 'End', 'Orientation')
+
+gff_9994
+# QC plots
+hist(gff_9994$Divergence, breaks=96)
+hist(gff_9994$Length, breaks=96)
+ggplot(gff_9994, aes(x=Length, y=Divergence)) +
+  geom_point( size=0.7) +
+  ggtitle("5S rDNAs")
+
+dim(gff_9994)
+#3364
+gff_9994 <- subset(gff_9994, Length >= 100)
+dim(gff_9994)
+#3265
+
+
+```

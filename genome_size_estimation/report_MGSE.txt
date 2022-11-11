@@ -1,0 +1,7 @@
+processing: /tmp/global2/frabanal/Ath_CLR_vs_HiFi/data/PCRfree/3_MGSE/9994.9994_ChrCMphiX.illumina.bam.Chr.cov
+average coverage in reference regions (median):	111.0
+average coverage in reference regions (mean):	133.117975211
+total coverage (combined length of all mapped reads):	19339704482.0
+total sequence length:	136135371
+estimated genome size based on mean [Mbp]:	145.282441769
+estimated genome size based on median [Mbp]:	174.23157191

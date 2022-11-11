@@ -1,0 +1,238 @@
+---
+title: "analysis_contig_breaks"
+output: html_document
+---
+
+
+####################################################################################
+################################# R-section ########################################
+####################################################################################
+
+```{r}
+WINDOW <- 2000
+CUTOFF_CONTIG <- 10000
+
+library(ggplot2)
+library(gridExtra)
+library(ggthemes)
+
+# Load Assembler names from universal list
+assemblies <- c('Canu-Arrow', 'Hifiasm', 'HiCanu', 'FALCON-Racon', 'Peregrine', 'IPA')
+
+# Define chromosomes and their sizes
+chromosomes <- data.frame(Chr=c('Chr1', 'Chr2', 'Chr3', 'Chr4', 'Chr5'), Size=c(30427671, 19698289, 23459830, 18585056, 26975502), stringsAsFactors=FALSE)
+
+# Define repeat lengths
+repeat_length <- data.frame(Type=c('centromere', '5S', '45S', 'telomere', 'mitochondria', 'chloroplast', "repeat_region", "ClassI_LTR" ,"ClassII_Helitrons" ,"ClassI_nonLTR" ,"ClassII_TIR" ), Size=c(178, 120, 9000, 7, 1, 1, 1, 1, 1, 1, 1), stringsAsFactors=FALSE) 
+
+# Initialize a counter data.frame that will collect Frequencies of repeats at Contig edges from all accessions
+ALL_edges <- data.frame(ALL_edges_TMP=NA, Freq=NA, Assembler=NA)
+
+PLACED_edges <- data.frame(PLACED_edges_TMP=NA, Freq=NA, Assembler=NA)
+UNPLACED_edges <- data.frame(UNPLACED_edges_TMP=NA, Freq=NA, Assembler=NA)
+
+# Initialize a counter for genome size, and assembly and unassembly lengths  
+genome_size <- data.frame(Assembler=NA, Genome_size=NA, Assembled_length=NA , Unassembled_length=NA )
+
+# Initialize a counter data.frame that will collect Repeat length from all accessions   
+COUNT_length_PLACED <- data.frame(Type=NA, Length=NA, Assembler=NA)
+COUNT_length_UNPLACED <- data.frame(Type=NA, Length=NA, Assembler=NA)
+
+# Loop for assemblies
+for(i in 1:length(assemblies)){
+
+  ##################################################################################
+  ############################## READ & FORMAT inputs ##############################
+
+  # Read Genome Size 
+  genome <- read.table('v1.94.est.9994.b.21mer.histo.genome.size.estimated.k21to21.fitted.txt',skip=4,nrow=1)
+  genome[1,1] <- assemblies[i]
+  colnames(genome) <- c('Assembler', 'Genome_size')
+  
+  # Read faidx with ALL contig lengths
+  faidx <- read.table(paste(assemblies[i], '/', assemblies[i], '_contigs.contigs.fa.fai', sep = ''))
+  faidx <- faidx[,-c(3:5)]
+  faidx$V1 <- gsub("\\|arrow\\|pilon", "" , faidx$V1)
+  colnames(faidx) <- c('Contig', 'Contig_length')
+
+  # Read list of Chr and UNPLACED contigs, and keep only UNPLACED
+  faidx_UNPLACED <- read.table(paste(assemblies[i], '/', assemblies[i], '_contigs.bionano.NonScaffolded.txt', sep = ''))
+  #faidx_UNPLACED <- faidx_UNPLACED[-grep("^Chr", faidx_UNPLACED$V1), -c(3:5)]
+  faidx_UNPLACED$V1 <- gsub("\\|arrow\\|pilon", "" , faidx_UNPLACED$V1)
+  faidx_UNPLACED <- faidx[ faidx$Contig %in% faidx_UNPLACED$V1, ]
+
+  # Define placed contigs
+  faidx_PLACED <- faidx[ !(faidx$Contig %in% faidx_UNPLACED$Contig), ]
+    
+  # Read and transform GFF3 file
+  gff <- read.table(paste(assemblies[i], '/', assemblies[i], '.Repeats_TEanno.gff3', sep = ''))
+  
+  head(gff)
+  
+  gff$Type <- unlist(lapply(strsplit(as.character(gff$V9), "[=_]"), "[", 2))
+  # Remove overlapping TE features (unneccesary after I filter them in BASH)
+  gff <- subset(gff, Type != "repeat" & Type != "lTSD" & Type != "lLTR" & Type != "rLTR" & Type != "rTSD")
+  # Dissect TEs classifications 
+  gff$Type <- mapply(FUN = function(V3, Type){
+    if(Type == "TE" | Type == "LTRRT" ){Type <- V3}
+    else{Type <- Type}}, gff$V3, gff$Type )
+
+  gff$Length <- unlist(lapply(strsplit(as.character(gff$V9), "Length="), "[", 2))
+  gff$Length <- as.numeric(unlist(lapply(strsplit(as.character(gff$Length), "[;]"), "[", 1)))
+  head(gff)
+  
+  gff$Divergence <- unlist(lapply(strsplit(as.character(gff$V9), "Divergence="), "[", 2))
+  gff$Divergence <- as.numeric(unlist(lapply(strsplit(as.character(gff$Divergence), "[;]"), "[", 1)))
+  head(gff)
+  
+  gff$Identity <- unlist(lapply(strsplit(as.character(gff$V9), "Identity="), "[", 2))
+  gff$Identity <- as.numeric(unlist(lapply(strsplit(as.character(gff$Identity), "[;]"), "[", 1)))
+  head(gff)
+
+  gff$V8 <- unlist(lapply(strsplit(as.character(gff$V9), "Coordinates="), "[", 2))
+  gff$Organelle_START <- as.numeric(unlist(lapply(strsplit(as.character(gff$V8), "[-;]"), "[", 1)))
+  gff$Organelle_END <- as.numeric(unlist(lapply(strsplit(as.character(gff$V8), "[-;]"), "[", 2)))
+  head(gff)
+  
+  
+  # Get rid of unnecessary columns
+  gff <- gff[ , -c(2,3,6,7,8,9)]
+  colnames(gff)[1:3] <- c('Contig', 'Start', 'End')
+  head(gff)
+
+  # CORRECT Length for the actual one in assembly (this way also TEs play)
+  gff$Length <- gff$End - gff$Start
+
+  # Mask with NA's repeats shorter than 90% their expected size. (too harsh for some large repeats)
+  gff <- merge(gff, repeat_length, all.x = TRUE)
+  gff$Start.2 <- mapply(FUN = function(Start, Length, Size){if(is.na(Length/Size)){Start <- NA}else if(Length/Size >= 0.9){Start <- Start}else{Start <- NA}}, gff$Start, gff$Length,  gff$Size )
+  gff$End.2 <- mapply(FUN = function(End, Length, Size){if(is.na(Length/Size)){End <- NA}else if(Length/Size >= 0.9){End <- End}else{End <- NA}}, gff$End, gff$Length,  gff$Size )
+  
+  # Create unique identifier for each event
+  gff$ID_start <- paste(gff$Contig, gff$Start, sep="-")
+  gff$ID_end <- paste(gff$Contig, gff$End, sep="-")
+
+  # EXTRA # Filter out duplicted Chr hits due to internal repeated structure of chloroplasts
+  gff <- gff[ -which(duplicated(gff$ID_start)), ]
+  
+  ##################################################################################
+  ############################## Assembly LENGTH ##############################
+  
+  genome$Assembled_length <- sum( faidx_PLACED$Contig_length )
+  genome$Unassembled_length <- sum( faidx_UNPLACED$Contig_length )
+  genome_size <- rbind(genome_size, genome)
+  
+  ##################################################################################
+  ############################## Repeats LENGTH ##############################
+
+  #Assembled 
+  gff_placed <- gff[ gff$Contig %in% faidx_PLACED$Contig, ]
+  gff_placed <- aggregate(Length ~ Type, gff_placed, sum)
+  gff_placed$Assembler <- assemblies[i]
+  # Add length of uncharacterized fraction
+  gff_placed[dim(gff_placed)[1]+1 , 2] <- genome[3] - sum(gff_placed$Length)
+  gff_placed[dim(gff_placed)[1] , 1] <- 'REST'
+  gff_placed[dim(gff_placed)[1] , 3] <- assemblies[i]
+  COUNT_length_PLACED <- rbind(COUNT_length_PLACED, gff_placed)
+  
+  #Unassembled
+  gff_unplaced <- gff[ gff$Contig %in% faidx_UNPLACED$Contig, ]
+  gff_unplaced <- aggregate(Length ~ Type, gff_unplaced, sum)
+  gff_unplaced$Assembler <- assemblies[i]
+  # Add length of uncharacterized fraction
+  gff_unplaced[dim(gff_unplaced)[1]+1 , 2] <- genome[4] - sum(gff_unplaced$Length)
+  gff_unplaced[dim(gff_unplaced)[1] , 1] <- 'REST'
+  gff_unplaced[dim(gff_unplaced)[1] , 3] <- assemblies[i]
+  COUNT_length_UNPLACED <- rbind(COUNT_length_UNPLACED, gff_unplaced)
+  
+  ##################################################################################
+  ############################## Contig BREAKS ##############################
+
+  # Find FIRST event per Contig
+  TEMP_s <- aggregate(gff$Start, by=list(Type=gff$Contig), FUN=min)
+  colnames(TEMP_s) <- c("Contig", "Chr_start")
+  TEMP_s$ID_start <- paste(TEMP_s$Contig, TEMP_s$Chr_start, sep="-")
+  TEMP_s <- TEMP_s[ , -1 ]
+  TEMP_s <- merge(TEMP_s, gff, by="ID_start")
+  TEMP_s <- TEMP_s[ , -c(10:15) ]
+  
+  # Find LAST event per Contig  
+  TEMP_e <- aggregate(gff$End, by=list(Type=gff$Contig), FUN=max)
+  colnames(TEMP_e) <- c("Contig", "Chr_end")
+  TEMP_e$ID_end <- paste(TEMP_e$Contig, TEMP_e$Chr_end, sep="-")
+  TEMP_e <- TEMP_e[ , -1 ]
+  TEMP_e <- merge(TEMP_e, gff, by="ID_end")
+  TEMP_e <- TEMP_e[ , -c(10:15) ]
+  
+  # Combine both coordinates of each contig into a single data frame  
+  TEMP_se <- merge(TEMP_s, TEMP_e, by="Contig")
+  
+  # Integrate Total Contig length (Consider to dump very short Contigs)
+  TEMP_se <- merge(TEMP_se, faidx, by="Contig", all.y=TRUE)
+  head(TEMP_se)
+  
+  # Mark repeat occurrences at contig edges
+  TEMP_se$Chr_start <- mapply(function(A, B){ 
+    if(is.na(A)){A <- NA}
+    else if(A < WINDOW){A <- B}
+    else{A<- NA}}, TEMP_se$Chr_start, TEMP_se$Type.x)
+
+  TEMP_se$Chr_end <- mapply(function(C, D, E){ 
+    if(is.na(C)){C <- NA}
+    else if(C > E - WINDOW){C <- D}
+    else{C <- NA}}, TEMP_se$Chr_end, TEMP_se$Type.y, TEMP_se$Contig_length)
+  
+  # Throw out CONTIGS below a certain size for further analysis
+  TEMP_se <- subset(TEMP_se, Contig_length > CUTOFF_CONTIG)
+  
+  # Count and organize those occurrences in a Frequency table
+  ALL_edges_TMP <- c(TEMP_se$Chr_start, TEMP_se$Chr_end)
+  ALL_edges_TMP <- data.frame(table(ALL_edges_TMP, exclude = NULL))
+  ALL_edges_TMP$Assembler <- assemblies[i]
+
+  # Divide ALL contigs in PLACED and UNPLACED
+  placed_TMP <- TEMP_se[ !(TEMP_se$Contig %in% faidx_UNPLACED$Contig), ]
+  unplaced_TMP <- TEMP_se[ TEMP_se$Contig %in% faidx_UNPLACED$Contig, ]
+  
+  # Count and organize those occurrences in a Frequency table
+  PLACED_edges_TMP <- c(placed_TMP$Chr_start, placed_TMP$Chr_end)
+  PLACED_edges_TMP <- data.frame(table(PLACED_edges_TMP, exclude = NULL))
+  PLACED_edges_TMP$Assembler <- assemblies[i]
+  
+  UNPLACED_edges_TMP <- c(unplaced_TMP$Chr_start, unplaced_TMP$Chr_end)
+  UNPLACED_edges_TMP <- data.frame(table(UNPLACED_edges_TMP, exclude = NULL))
+  UNPLACED_edges_TMP$Assembler <- assemblies[i]
+
+  # Concatenate stuff
+  ALL_edges <- rbind(ALL_edges, ALL_edges_TMP)
+  PLACED_edges <- rbind(PLACED_edges, PLACED_edges_TMP)
+  UNPLACED_edges <- rbind(UNPLACED_edges, UNPLACED_edges_TMP)
+}
+
+# Remove first rows
+genome_size <- genome_size[-1, ]
+
+COUNT_length_PLACED <- COUNT_length_PLACED[-1, ]
+COUNT_length_UNPLACED <- COUNT_length_UNPLACED[-1, ]
+
+ALL_edges <- ALL_edges[-1, ]
+PLACED_edges <- PLACED_edges[-1, ]
+UNPLACED_edges <- UNPLACED_edges[-1, ]
+
+# Output relevant objects
+write.table(genome_size, "output_files/genome_size.txt", row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(COUNT_length_PLACED, "output_files/COUNT_length_PLACED.txt", row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(COUNT_length_UNPLACED, "output_files/COUNT_length_UNPLACED.txt", row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(PLACED_edges, "output_files/PLACED_edges.txt", row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(UNPLACED_edges, "output_files/UNPLACED_edges.txt", row.names = FALSE, quote = FALSE, sep = "\t")
+
+
+# Create additional copies of some objects.
+ALL_edges_B <- ALL_edges 
+PLACED_edges_B <- PLACED_edges
+UNPLACED_edges_B <- UNPLACED_edges
+
+COUNT_length_PLACED_B <- COUNT_length_PLACED
+COUNT_length_UNPLACED_B <- COUNT_length_UNPLACED
+
+```
